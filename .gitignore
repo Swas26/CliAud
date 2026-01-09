@@ -1,0 +1,4 @@
+cliaud
+*.dSYM/
+*.o
+.DS_Store
