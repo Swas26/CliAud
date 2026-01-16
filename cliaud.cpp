@@ -111,7 +111,7 @@ static OSStatus setDefaultOutput(AudioDeviceID device){
 
 static vector<AudioDeviceID> getALlDevices() {
     AudioObjectPropertyAddress addr{
-        kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioHardwarePropertyDevices,
         kAudioObjectPropertyScopeGlobal,
         kAudioObjectPropertyElementMain
     };
@@ -152,6 +152,13 @@ static void esnusreConfigDir(){
     fs::create_directories(string(home) + "/.config/cliaud");
 }
 
+// static void rtrim(string& s){
+//     while(!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' ' || s.back() == '\t')){
+//         s.pop_back();
+//     }
+// }
+
+
 static bool readConfig(string& A, string& B){ // gets a and b from config.txt and returns true if bothe are there 
     A.clear(); B.clear();
     ifstream in(configPath());
@@ -159,8 +166,12 @@ static bool readConfig(string& A, string& B){ // gets a and b from config.txt an
 
     string line;
     while(getline(in, line)){
-        if (line.rfind("A=", 0) == 0) A = line.substr(2);
-        else if(line.rfind("B=", 0) == 0) B = line.substr(2);
+        // if (line.rfind("A=", 0) == 0) { A = line.substr(2); rtrim(A); }
+        // else if (line.rfind("B=", 0) == 0) { B = line.substr(2); rtrim(B); }
+        
+        if (line.rfind("A=", 0) == 0) { A = line.substr(2);  }
+        else if (line.rfind("B=", 0) == 0) { B = line.substr(2); }
+
     }
     return !(A.empty() || B.empty());
 }
@@ -169,35 +180,23 @@ static bool writeConfig(const string& A, const string& B){
     esnusreConfigDir();
     ofstream out(configPath(), ios::trunc);
     if(!out) return false;
-    out << "A=" << A << "\n";
-    out << "B=" << B << "\n";
+    out << "A=" << A << endl;
+    out << "B=" << B << endl;
+    return true;
 }
 
 
-int main() {
-    // now we get all the devices 
-    AudioObjectPropertyAddress addr{
-        kAudioHardwarePropertyDevices, 
-        kAudioObjectPropertyScopeGlobal, 
-        kAudioObjectPropertyElementMain
-    };
 
-    UInt32 size = 0; 
-    if(AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, nullptr, &size) != noErr ){
-        cerr << "failed to get device" <<endl;
-        return 1;
-    }
-
-    const UInt32 count = size / sizeof(AudioDeviceID);
-    vector<AudioDeviceID> devices(count);
-
-    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr, &size, devices.data()) != noErr) {
-        cerr << "Failed to get device list" << endl;
+// cmdlist as a helper.. 
+static int cmdList() {
+    auto devices = getALlDevices();
+    if(devices.empty()){
+        cerr << "Failed to get devices list " << endl;
         return 1;
     }
 
     const AudioDeviceID def = getDefaultOutput();
-    cout << "Output devices :" <<endl;
+    cout << "Output devices: " << endl;
 
     for (auto dev : devices ) {
         if (!isOutputDevice(dev)) continue;
@@ -205,7 +204,92 @@ int main() {
         if(name.empty()) continue;
         cout << ( (dev == def) ? "-*" : " ") << dev << " " << name << endl;
     }
+    return 0;
+}
 
-    return 0; 
+static int cmdSet(char which, const string& name){ // this updates the config 
+    string A, B;
+    readConfig(A, B); // will return false if file dosent exists yet.
+
+    if (which == 'A') A = name;
+    else B = name;
+
+    if(!writeConfig(A, B)){
+        cerr << "Failed to write config" << endl;
+        return 1;
+    }
+    return 0;
+
+}
+
+static int cmdToggle() {
+    string Aname, Bname;
+    if(!readConfig(Aname, Bname)){
+        cerr << "Config missing" << endl;
+        return 1;
+    }
+    
+    AudioDeviceID Aid = findOutputDeviceByName(Aname);
+    AudioDeviceID Bid = findOutputDeviceByName(Bname);
+
+    if(Aid == kAudioObjectUnknown && Bid == kAudioObjectUnknown) {
+        cerr << "Neither configured device is available" << endl;
+        return 1; 
+    }
+
+    AudioDeviceID cur = getDefaultOutput();
+    AudioDeviceID target = kAudioObjectUnknown;
+
+    if (Aid != kAudioObjectUnknown && Bid != kAudioObjectUnknown){
+        target = (cur == Aid) ? Bid : Aid; // if current default is aid get bid.. else get aid and make it target. 
+    } else if (Aid != kAudioObjectUnknown){
+        target = Aid;
+    } else {
+        target = Bid;
+    }
+
+    OSStatus st = setDefaultOutput(target);
+
+    if (st != noErr){
+        cerr << "Failed to set default output OSStatus = " << st << endl;
+        return 1;
+    }
+
+    cout << "Switched output to: " << getDeviceName(target) << endl;
+    return 0;
+}
+
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        cerr << "Usage:\n"
+             << "  cliaud list\n"
+             << "  cliaud set-a \"Device Name\"\n"
+             << "  cliaud set-b \"Device Name\"\n"
+             << "  cliaud toggle\n";
+        return 1;
+    }
+
+    string cmd = argv[1];
+    if (cmd == "list") return cmdList();
+    if (cmd == "set-a") {
+        if (argc < 3) { 
+            cerr << "Missing device name" << endl;
+            return 1; }
+
+        return cmdSet('A', argv[2]);
+    }
+    
+    if (cmd == "set-b") {
+        if (argc < 3) { 
+            cerr << "Missing device name" << endl;
+            return 1; }
+
+        return cmdSet('B', argv[2]);
+    }
+    if (cmd == "toggle") return cmdToggle();
+
+    cerr << "Unknown command: " << cmd << endl;
+    return 1;
 }
 
