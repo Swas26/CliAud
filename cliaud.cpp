@@ -104,6 +104,23 @@ static OSStatus setDefaultOutput(AudioDeviceID device){
 }
 
 
+static vector<AudioDeviceID> getALlDevices() {
+    AudioObjectPropertyAddress addr{
+        kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, nullptr, &size) != noErr || size == 0) return {};
+    UInt32 count = size / sizeof(AudioDeviceID);
+    vector<AudioDeviceID> devices(count);
+
+    if(AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr, &size, devices.data()) != noErr) return {};
+
+    return devices;
+}
+
 
 int main() {
     // now we get all the devices 
@@ -115,7 +132,7 @@ int main() {
 
     UInt32 size = 0; 
     if(AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, nullptr, &size) != noErr ){
-        cerr << "failed to get device";
+        cerr << "failed to get device" <<endl;
         return 1;
     }
 
@@ -123,7 +140,7 @@ int main() {
     vector<AudioDeviceID> devices(count);
 
     if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr, &size, devices.data()) != noErr) {
-        std::cerr << "Failed to get device list" << endl;
+        cerr << "Failed to get device list" << endl;
         return 1;
     }
 
@@ -137,6 +154,6 @@ int main() {
         cout << ( (dev == def) ? "-*" : " ") << dev << " " << name << endl;
     }
 
-    return 0;
+    return 0; 
 }
 
