@@ -3,9 +3,14 @@
 # include<iostream>
 # include<vector>
 # include<string>
+# include<fstream>
+# include <filesystem>
+# include<cstdlib>
+
 
 
 using namespace std;
+namespace fs = std::filesystem;
 
 // holds cf string's chars in a buffer. 
 static string cfStringToStd(CFStringRef s){
@@ -119,6 +124,53 @@ static vector<AudioDeviceID> getALlDevices() {
     if(AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr, &size, devices.data()) != noErr) return {};
 
     return devices;
+}
+
+static AudioDeviceID findOutputDeviceByName(const string& targetname){
+    auto devices = getALlDevices();
+    for (auto device : devices){
+        if(!isOutputDevice(device)) continue; // skips devices with no output channels
+        auto name = getDeviceName(device);
+        if( !name.empty() && name == targetname) return device;
+    }
+
+    return kAudioObjectUnknown;
+}
+
+
+// HELPERS for reading and writing output names. 
+
+static string configPath() {
+    const char* home = getenv("HOME"); // gets the home directry on any mac user. as a key value pair
+    if (!home) return "config.txt";
+    return string(home) + "/.config/cliaud/config.txt";
+}
+
+static void esnusreConfigDir(){
+    const char* home = getenv("HOME");
+    if (!home) return;
+    fs::create_directories(string(home) + "/.config/cliaud");
+}
+
+static bool readConfig(string& A, string& B){ // gets a and b from config.txt and returns true if bothe are there 
+    A.clear(); B.clear();
+    ifstream in(configPath());
+    if (!in) return false;
+
+    string line;
+    while(getline(in, line)){
+        if (line.rfind("A=", 0) == 0) A = line.substr(2);
+        else if(line.rfind("B=", 0) == 0) B = line.substr(2);
+    }
+    return !(A.empty() || B.empty());
+}
+
+static bool writeConfig(const string& A, const string& B){
+    esnusreConfigDir();
+    ofstream out(configPath(), ios::trunc);
+    if(!out) return false;
+    out << "A=" << A << "\n";
+    out << "B=" << B << "\n";
 }
 
 
