@@ -24,6 +24,17 @@ static string cfStringToStd(CFStringRef s){
     return {};
 }
 
+static bool parseIndex(const char* arg, size_t& outIdx){ // converst cli's string to literal unsinged int. 
+    if (!arg || !*arg) return false;
+
+    long v = strtol(arg, nullptr, 10);
+
+    if( v < 0) return false;
+
+    outIdx = static_cast<size_t>(v);
+    return true;
+}
+
 static bool isOutputDevice(AudioDeviceID device){ // checks if the device has atleast 1 output stream 
 
     AudioObjectPropertyAddress addr{
@@ -63,6 +74,22 @@ static bool isOutputDevice(AudioDeviceID device){ // checks if the device has at
 string getDeviceName(AudioDeviceID device){
     AudioObjectPropertyAddress addr{
         kAudioObjectPropertyName, //address structure gets 3 elements.. the selection here name
+        kAudioObjectPropertyScopeGlobal, //the scope of output as global
+        kAudioObjectPropertyElementMain //the default or primary one.
+    };
+    CFStringRef name = nullptr;
+    UInt32 size = sizeof(name);
+
+    if(AudioObjectGetPropertyData(device, &addr, 0, nullptr, &size, &name) != noErr) return{}; 
+
+    string out = cfStringToStd(name);
+    if (name) CFRelease(name); // were done with cfstring's reference.. now remove it.. caus c++ is really messed up with garbage.
+    return out;
+}
+
+string getDeviceUID(AudioDeviceID device){
+    AudioObjectPropertyAddress addr{
+        kAudioDevicePropertyDeviceUID, //address structure gets 3 elements.. the selection here name
         kAudioObjectPropertyScopeGlobal, //the scope of output as global
         kAudioObjectPropertyElementMain //the default or primary one.
     };
@@ -126,12 +153,11 @@ static vector<AudioDeviceID> getALlDevices() {
     return devices;
 }
 
-static AudioDeviceID findOutputDeviceByName(const string& targetname){
+static AudioDeviceID findDeviceByUID(const string& tergetUID){
     auto devices = getALlDevices();
     for (auto device : devices){
-        if(!isOutputDevice(device)) continue; // skips devices with no output channels
-        auto name = getDeviceName(device);
-        if( !name.empty() && name == targetname) return device;
+        auto uid = getDeviceUID(device);
+        if( !uid.empty() && uid == tergetUID) return device;
     }
 
     return kAudioObjectUnknown;
@@ -152,142 +178,217 @@ static void esnusreConfigDir(){
     fs::create_directories(string(home) + "/.config/cliaud");
 }
 
-// static void rtrim(string& s){
-//     while(!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' ' || s.back() == '\t')){
-//         s.pop_back();
-//     }
-// }
+static bool readUIDList(vector<string>& uids){
+    uids.clear();
 
-
-static bool readConfig(string& A, string& B){ // gets a and b from config.txt and returns true if bothe are there 
-    A.clear(); B.clear();
-    ifstream in(configPath());
-    if (!in) return false;
+    ifstream inf(configPath());
+    if(!inf) return false;
 
     string line;
-    while(getline(in, line)){
-        // if (line.rfind("A=", 0) == 0) { A = line.substr(2); rtrim(A); }
-        // else if (line.rfind("B=", 0) == 0) { B = line.substr(2); rtrim(B); }
-        
-        if (line.rfind("A=", 0) == 0) { A = line.substr(2);  }
-        else if (line.rfind("B=", 0) == 0) { B = line.substr(2); }
-
-    }
-    return !(A.empty() || B.empty());
+    while( getline(inf, line)){
+        if(line.rfind("UID=", 0) == 0) {uids.push_back(line.substr(4)) ;}
+    }    
+    return !uids.empty();
 }
 
-static bool writeConfig(const string& A, const string& B){
+static bool writeUIDList(const vector<string>& uids){
     esnusreConfigDir();
-    ofstream out(configPath(), ios::trunc);
-    if(!out) return false;
-    out << "A=" << A << endl;
-    out << "B=" << B << endl;
+    ofstream outf(configPath(), ios::trunc);
+    if(!outf) return false;
+
+    for (const auto& uid : uids){
+        outf << "UID=" << uid << endl;
+    }
     return true;
 }
 
+static bool addUIDToConfig(const string& uid) {
+    if (uid.empty()) return false;
+
+    vector<string> uids;
+    readUIDList(uids);
+
+    for(const auto& existing : uids){
+        if (existing == uid) return true; // uid is already present
+    }
+
+    uids.push_back(uid);
+    return writeUIDList(uids);
+}
+
+
+// custom structure for AudioOBjects. 
+struct ListedDevice {
+    AudioDeviceID id;
+    string name;
+    string uid;
+    bool outputChanel;
+};
+
+static vector<ListedDevice> buildSelectableList(){
+    vector<ListedDevice> list;
+    auto devices = getALlDevices();
+
+    for ( auto device : devices){
+        string name = getDeviceName(device);
+        string uid = getDeviceUID(device);
+        if (name.empty() || uid.empty()) continue;
+        if (!isOutputDevice(device)) continue;  // hard filtering only output chanels later can have more options 
+
+        list.push_back(ListedDevice{
+            device, name, uid, true
+        });
+    }
+    return list;
+
+}
 
 
 // cmdlist as a helper.. 
 static int cmdList() {
-    auto devices = getALlDevices();
-    if(devices.empty()){
-        cerr << "Failed to get devices list " << endl;
+    auto list = buildSelectableList();
+    if(list.empty()){
+        cerr << "no devices found" << endl;
         return 1;
     }
 
-    const AudioDeviceID def = getDefaultOutput();
-    cout << "Output devices: " << endl;
+    AudioDeviceID def = getDefaultOutput();
+    string defUID = (def != kAudioObjectUnknown) ? getDeviceUID(def) : "";
 
-    for (auto dev : devices ) {
-        if (!isOutputDevice(dev)) continue;
-        auto name = getDeviceName(dev);
-        if(name.empty()) continue;
-        cout << ( (dev == def) ? "-*" : " ") << dev << " " << name << endl;
+    cout << "Selectable devices: " << endl;
+
+    for (int i = 0; i < list.size(); i++){
+        const auto& it = list[i];
+        bool ifDef = (!defUID.empty() && it.uid == defUID);
+        cout << "[ " << i << " ]" << (ifDef ? "-*" : "  ") << it.name << endl;
     }
     return 0;
 }
 
-static int cmdSet(char which, const string& name){ // this updates the config 
-    string A, B;
-    readConfig(A, B); // will return false if file dosent exists yet.
-
-    if (which == 'A') A = name;
-    else B = name;
-
-    if(!writeConfig(A, B)){
-        cerr << "Failed to write config" << endl;
+static int cmdAdd(const char* idxArg){
+    size_t idx = 0; // prevents undefined behaviour. 
+    if (!parseIndex(idxArg, idx)){
+        cerr << "index must be non negative" << endl;
         return 1;
     }
-    return 0;
+    auto list = buildSelectableList();
 
+    if (idx >= list.size()){
+        cerr << "index out of range" << endl;
+        return 1;
+    }
+
+    const auto& chosen = list[idx];
+
+    if(!addUIDToConfig(chosen.uid)){
+        cerr << "failed to add device to config.txt" << endl;
+        return 1;
+    }
+
+    cout << "Added: " << chosen.name << endl;
+    return 0;
 }
 
-static int cmdToggle() {
-    string Aname, Bname;
-    if(!readConfig(Aname, Bname)){
-        cerr << "Config missing" << endl;
-        return 1;
+static int cmdShow(){
+    vector<string> uids;
+    if(!readUIDList(uids)){
+        cerr << "no sabed devices " << endl; return 1;
     }
-    
-    AudioDeviceID Aid = findOutputDeviceByName(Aname);
-    AudioDeviceID Bid = findOutputDeviceByName(Bname);
+    cout << "Saved devices: " << endl;
+    for (size_t i = 0; i < uids.size(); i++){
+        AudioDeviceID device = findDeviceByUID(uids[i]);
+        if(device == kAudioObjectUnknown){
+            cout << "[ " << i << " ] missing uid -> " << uids[i] << endl; 
+        } else {
+            cout << "[ " << i << " ]" << getDeviceName(device) << endl; 
+        }
+    }
+    return 0;
+}
 
-    if(Aid == kAudioObjectUnknown && Bid == kAudioObjectUnknown) {
-        cerr << "Neither configured device is available" << endl;
-        return 1; 
+static int cmdCycle() {
+    vector<string> savedUIDs;
+    if(!readUIDList(savedUIDs)){
+        cerr << "Config is missing" << endl; return 1;
+    }
+
+    vector<AudioDeviceID> available;
+    vector<string> availableUIDs;
+
+    for (const auto& uid : savedUIDs) {
+        AudioDeviceID device = findDeviceByUID(uid);
+        if( device != kAudioObjectUnknown){
+            available.push_back(device);
+            availableUIDs.push_back(uid);
+        }
+    }
+
+    if (available.empty()){
+        cerr << "None of the saved devices are currently available" << endl; return 1;
     }
 
     AudioDeviceID cur = getDefaultOutput();
-    AudioDeviceID target = kAudioObjectUnknown;
+    string curUID = (cur != kAudioObjectUnknown) ? getDeviceUID(cur) : "";
 
-    if (Aid != kAudioObjectUnknown && Bid != kAudioObjectUnknown){
-        target = (cur == Aid) ? Bid : Aid; // if current default is aid get bid.. else get aid and make it target. 
-    } else if (Aid != kAudioObjectUnknown){
-        target = Aid;
+    size_t targetIdx = 0;
+
+    if(!curUID.empty()){
+        size_t pos = 0;
+        bool found = false;
+
+        for ( ; pos < availableUIDs.size(); pos++){
+            if (availableUIDs[pos] == curUID) { found = true; break; }
+        }
+
+        if (found){targetIdx = (pos + 1) % available.size();}
+        else targetIdx = 0;
     } else {
-        target = Bid;
+        targetIdx = 0;
     }
 
+    AudioDeviceID target = available[targetIdx];
     OSStatus st = setDefaultOutput(target);
 
-    if (st != noErr){
-        cerr << "Failed to set default output OSStatus = " << st << endl;
-        return 1;
+    if(st != noErr){
+        cerr << "Failed to set default output" << endl; return 1;
     }
 
-    cout << "Switched output to: " << getDeviceName(target) << endl;
+    cout << "Switched output to " << getDeviceName(target) << endl;
     return 0;
 }
+
+
+static int cmdClear() {
+    vector<string> empty;
+    if (!writeUIDList(empty)) {
+        cerr << "Failed to clear config\n";
+        return 1;
+    }
+    cout << "Cleared saved devices.\n";
+    return 0;
+}
+
 
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        cerr << "Usage:\n"
-             << "  cliaud list\n"
-             << "  cliaud set-a \"Device Name\"\n"
-             << "  cliaud set-b \"Device Name\"\n"
-             << "  cliaud toggle\n";
-        return 1;
+        cout << "Usage:" << endl;
+        cout << "cliaud list" << endl;
+        cout << "cliaud add <index>" << endl;
+        cout << "cliaud show" << endl;
+        cout << "cliaud cycle" << endl;
     }
 
     string cmd = argv[1];
-    if (cmd == "list") return cmdList();
-    if (cmd == "set-a") {
-        if (argc < 3) { 
-            cerr << "Missing device name" << endl;
-            return 1; }
 
-        return cmdSet('A', argv[2]);
+    if (cmd == "list")  return cmdList();
+    if (cmd == "add") {
+        if (argc < 3) { cout << "Missing index. use ./cliaud list" << endl; return 1; }
+        return cmdAdd(argv[2]);
     }
-    
-    if (cmd == "set-b") {
-        if (argc < 3) { 
-            cerr << "Missing device name" << endl;
-            return 1; }
-
-        return cmdSet('B', argv[2]);
-    }
-    if (cmd == "toggle") return cmdToggle();
+    if (cmd == "show")  return cmdShow();
+    if (cmd == "cycle") return cmdCycle();
+    if (cmd == "clear") return cmdClear();
 
     cerr << "Unknown command: " << cmd << endl;
     return 1;
