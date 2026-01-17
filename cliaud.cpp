@@ -35,6 +35,32 @@ static bool parseIndex(const char* arg, size_t& outIdx){ // converst cli's strin
     return true;
 }
 
+static vector<size_t> parseIndexList(const char* arg) {
+    vector<size_t> result;
+    if (!arg || !*arg) return result;
+
+    string s(arg);
+    size_t start = 0;
+
+    while (true) {
+        size_t comma = s.find(',', start);
+        string token = (comma == string::npos) ? s.substr(start) : s.substr(start, comma - start);
+
+        size_t idx = 0;
+        if (parseIndex(token.c_str(), idx)) {
+            result.push_back(idx);
+        } else {
+            cerr << "Invalid index skipped: " << token << endl;
+        }
+
+        if (comma == string::npos) break;
+        start = comma + 1;
+    }
+
+    return result;
+}
+
+
 static bool isOutputDevice(AudioDeviceID device){ // checks if the device has atleast 1 output stream 
 
     AudioObjectPropertyAddress addr{
@@ -265,29 +291,38 @@ static int cmdList() {
     return 0;
 }
 
-static int cmdAdd(const char* idxArg){
-    size_t idx = 0; // prevents undefined behaviour. 
-    if (!parseIndex(idxArg, idx)){
-        cerr << "index must be non negative" << endl;
-        return 1;
+static int cmdAdd(const char* idxArg) {
+    auto indices = parseIndexList(idxArg);
+    if (indices.empty()) {
+        cerr << "No valid indices provided" << endl; return 1;
     }
+
     auto list = buildSelectableList();
-
-    if (idx >= list.size()){
-        cerr << "index out of range" << endl;
-        return 1;
+    if (list.empty()) {
+        cerr << "No selectable devices" << endl; return 1;
     }
 
-    const auto& chosen = list[idx];
+    bool addedAny = false;
 
-    if(!addUIDToConfig(chosen.uid)){
-        cerr << "failed to add device to config.txt" << endl;
-        return 1;
+    for (size_t idx : indices) {
+        if (idx >= list.size()) {
+            cerr << "Index out of range skipped: " << idx << endl;
+            continue;
+        }
+
+        const auto& chosen = list[idx];
+
+        if (addUIDToConfig(chosen.uid)) {
+            cout << "Added: " << chosen.name << endl;
+            addedAny = true;
+        } else {
+            cerr << "Failed to add: " << chosen.name << endl;
+        }
     }
 
-    cout << "Added: " << chosen.name << endl;
-    return 0;
+    return addedAny ? 0 : 1;
 }
+
 
 static int cmdShow(){
     vector<string> uids;
@@ -374,9 +409,10 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         cout << "Usage:" << endl;
         cout << "cliaud list" << endl;
-        cout << "cliaud add <index>" << endl;
+        cout << "cliaud add <indexList>" << endl;
         cout << "cliaud show" << endl;
         cout << "cliaud cycle" << endl;
+        cout << "cliaud clear" << endl;
     }
 
     string cmd = argv[1];
