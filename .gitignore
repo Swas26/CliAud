@@ -1,4 +1,37 @@
+# =========================
+# Build artifacts
+# =========================
 cliaud
-*.dSYM/
+cliaud-agent
 *.o
+*.out
+*.a
+*.dSYM/
+
+# =========================
+# macOS / Finder junk
+# =========================
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# =========================
+# Editor / IDE files
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# =========================
+# User-specific config (DO NOT COMMIT)
+# =========================
+.config/
+agent.conf
+config.txt
+
+# =========================
+# Logs
+# =========================
+*.log

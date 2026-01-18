@@ -412,7 +412,7 @@ int main(int argc, char** argv) {
         cout << "cliaud add <indexList>" << endl;
         cout << "cliaud show" << endl;
         cout << "cliaud cycle" << endl;
-        cout << "cliaud clear" << endl;
+        cout << "cliaud clear" << endl; return 1;
     }
 
     string cmd = argv[1];
