@@ -9,6 +9,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+extern char **environ;
+
 using namespace std;
 
 static string findCliaudPath() {
