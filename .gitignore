@@ -25,11 +25,9 @@ cliaud-agent
 *.tmp
 
 # =========================
-# User-specific config (DO NOT COMMIT)
+# Runtime / local-only files
 # =========================
 .config/
-agent.conf
-config.txt
 
 # =========================
 # Logs
