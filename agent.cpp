@@ -11,30 +11,57 @@
 
 using namespace std;
 
-extern char **environ;
+static string findCliaudPath() {
+    // 1) Allow override if you ever want it
+    if (const char* env = getenv("CLIAUD_PATH")) {
+        if (*env && access(env, X_OK) == 0) return string(env);
+    }
+
+    // 2) Common Homebrew locations
+    const char* candidates[] = {
+        "/opt/homebrew/bin/cliaud", // Apple Silicon
+        "/usr/local/bin/cliaud",    // Intel Homebrew
+        nullptr
+    };
+
+    for (int i = 0; candidates[i]; i++) {
+        if (access(candidates[i], X_OK) == 0) return string(candidates[i]);
+    }
+
+    // 3) Fallback: rely on PATH (may fail in LaunchAgents)
+    return "cliaud";
+}
 
 static void runCycle() {
-   const char* argv[] = {"cliaud", "cycle", nullptr};
+    string cliaudPath = findCliaudPath();
 
-   pid_t pid = 0; // pid_t is a datatype that representa process ids. and process ids are nums assinged by OS to each running task.
-   int status = 0; 
+    const char* argv[] = { cliaudPath.c_str(), "cycle", nullptr };
 
-   int err = posix_spawn(&pid, "cliaud", nullptr, nullptr, (char * const*)argv, environ); // calls a new child process that executes a specific file 
-   if (err != 0) {
-    fprintf(stderr, "cliaud agent posix_spawn failed err = %d", err);
-    fflush(stderr);
-    return;
-   }
-   if (waitpid(pid, &status, 0) < 0) {
-        fprintf(stderr, "cliaud agent waitpid failed" );
+    pid_t pid = 0;
+    int status = 0;
+
+    int err = posix_spawn(&pid, cliaudPath.c_str(), nullptr, nullptr, (char* const*)argv, environ);
+    if (err != 0) {
+        fprintf(stderr, "[cliaud-agent] spawn failed err=%d path='%s'\n", err, cliaudPath.c_str());
         fflush(stderr);
         return;
     }
+
+    if (waitpid(pid, &status, 0) < 0) {
+        fprintf(stderr, "[cliaud-agent] waitpid failed\n");
+        fflush(stderr);
+        return;
+    }
+
+    int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    fprintf(stderr, "[cliaud-agent] ran: %s cycle (exit=%d)\n", cliaudPath.c_str(), exitCode);
+    fflush(stderr);
 }
 
 static OSStatus HotKeyHandler(EventHandlerCallRef, EventRef event, void*) {
     EventHotKeyID hkID{};
-    GetEventParameter(event, kEventParamDirectObject, typeEventHotKeyID,nullptr, sizeof(hkID), nullptr, &hkID);
+    GetEventParameter(event, kEventParamDirectObject, typeEventHotKeyID,
+                      nullptr, sizeof(hkID), nullptr, &hkID);
 
     if (hkID.signature == 'CLAD' && hkID.id == 1) {
         runCycle();
@@ -43,25 +70,23 @@ static OSStatus HotKeyHandler(EventHandlerCallRef, EventRef event, void*) {
 }
 
 int main() {
-    // Register handler for hotkey pressed
     EventTypeSpec eventType { kEventClassKeyboard, kEventHotKeyPressed };
     InstallApplicationEventHandler(HotKeyHandler, 1, &eventType, nullptr, nullptr);
 
-    // Default hotkey: Cmd + Option + 9
     EventHotKeyID hkID { 'CLAD', 1 };
     EventHotKeyRef hkRef = nullptr;
 
-    OSStatus st = RegisterEventHotKey(kVK_ANSI_9, optionKey | cmdKey,hkID, GetApplicationEventTarget(), 0, &hkRef);
+    OSStatus st = RegisterEventHotKey(kVK_ANSI_9, optionKey | cmdKey,
+                                      hkID, GetApplicationEventTarget(), 0, &hkRef);
 
     if (st != noErr) {
-        fprintf(stderr, "cliaud agent RegisterEventHotKey failed: %d", (int)st);
+        fprintf(stderr, "[cliaud-agent] RegisterEventHotKey failed: %d\n", (int)st);
         return 1;
     }
 
-    fprintf(stderr, "cliaud agent Hotkey registered: Cmd+Option+9");
+    fprintf(stderr, "[cliaud-agent] Hotkey registered: Cmd+Option+9\n");
     fflush(stderr);
 
-    // Event loop
     for (;;) {
         EventRef eventRef = nullptr;
         OSStatus err = ReceiveNextEvent(0, nullptr, kEventDurationForever, true, &eventRef);
@@ -70,5 +95,4 @@ int main() {
             ReleaseEvent(eventRef);
         }
     }
-    return 0;
 }
